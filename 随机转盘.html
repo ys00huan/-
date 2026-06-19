@@ -149,7 +149,6 @@
             opacity: 0.6;
         }
 
-        /* 奖项&权重面板 */
         .prize-panel {
             margin-top: 28px;
             text-align: left;
@@ -293,11 +292,6 @@
             text-align: right;
         }
 
-        /* 结果区域已移除，此样式仅占位 */
-        .result-placeholder {
-            display: none;
-        }
-
         @media (max-width: 480px) {
             .container {
                 padding: 20px 16px 28px;
@@ -416,7 +410,7 @@
         // ============================================================
         // 数据
         // ============================================================
-        let prizes = []; // [{ name, weight }]
+        let prizes = [];
         let totalRotation = 0;
         let isSpinning = false;
 
@@ -437,7 +431,7 @@
         }
 
         // ============================================================
-        // 绘制转盘（根据权重）
+        // 绘制转盘
         // ============================================================
         function drawWheel() {
             const w = canvas.width;
@@ -468,7 +462,6 @@
                 ctx.lineWidth = 2.5;
                 ctx.stroke();
 
-                // 文字
                 const midAngle = startAngle + sliceAngle / 2;
                 const textR = radius * 0.68;
                 const tx = cx + Math.cos(midAngle) * textR;
@@ -529,15 +522,14 @@
                 const div = document.createElement('div');
                 div.className = 'weight-item';
                 div.innerHTML = `
-                            <span class="label">${p.name}</span>
-                            <input type="number" min="0" max="100" step="0.1" value="${p.weight}" data-index="${idx}" />
-                            <span class="percent">${percent}%</span>
-                            <div class="bar-bg"><div class="bar-fill" style="width:${percent}%;"></div></div>
-                        `;
+                    <span class="label">${p.name}</span>
+                    <input type="number" min="0" max="100" step="0.1" value="${p.weight}" data-index="${idx}" />
+                    <span class="percent">${percent}%</span>
+                    <div class="bar-bg"><div class="bar-fill" style="width:${percent}%;"></div></div>
+                `;
                 weightContainer.appendChild(div);
             });
             updateTotalPercent();
-            // 绑定输入事件
             weightContainer.querySelectorAll('input[type="number"]').forEach(inp => {
                 inp.addEventListener('input', function(e) {
                     const idx = parseInt(this.dataset.index);
@@ -584,7 +576,7 @@
         }
 
         // ============================================================
-        // 更新转盘（读取权重并重绘）
+        // 更新转盘
         // ============================================================
         function updateWheel() {
             if (isSpinning) return;
@@ -615,7 +607,7 @@
         }
 
         // ============================================================
-        // 🎯 旋转核心 —— 使用「大整数随机」彻底避免边界问题
+        // 🎯 旋转核心 —— 使用整数权重 + 大范围随机，彻底解决偏大问题
         // ============================================================
         function spinWheel() {
             if (isSpinning) return;
@@ -624,7 +616,7 @@
                 return;
             }
 
-            // 1. 从输入框同步权重
+            // 1. 同步权重
             const inputs = weightContainer.querySelectorAll('input[type="number"]');
             inputs.forEach(inp => {
                 const idx = parseInt(inp.dataset.index);
@@ -633,81 +625,63 @@
                 prizes[idx].weight = val;
             });
 
-            // 2. 归一化
-            const norm = normalizeWeights(prizes);
-            const totalWeight = norm.reduce((s, p) => s + p.weight, 0);
+            // 2. 计算总权重，若为0则报错
+            const totalWeight = prizes.reduce((s, p) => s + p.weight, 0);
             if (totalWeight === 0) {
                 alert('所有权重不能为零！');
                 return;
             }
 
-            const count = norm.length;
+            // 3. 将权重放大为整数（精度因子 10000，足够避免边界误差）
+            const FACTOR = 10000;
+            const weightInts = prizes.map(p => Math.round(p.weight * FACTOR));
+            const totalWeightInt = weightInts.reduce((a, b) => a + b, 0);
+            if (totalWeightInt === 0) {
+                alert('权重放大后仍为零，请增大权重值');
+                return;
+            }
 
-            // ──────────────────────────────────────────────────────────
-            // 3. 大整数随机 (分母 1,000,000，分子取 0 ~ 999,999)
-            //    彻底消除浮点数比较带来的边界误差
-            // ──────────────────────────────────────────────────────────
-            const SCALE = 1000000;
-            const randInt = Math.floor(Math.random() * SCALE); // [0, SCALE-1]
+            // 4. 生成随机整数 [0, totalWeightInt)
+            const randInt = Math.floor(Math.random() * totalWeightInt);
 
-            // 4. 遍历累积权重（整数化）和累积角度，同时完成：
-            //    - 奖项选择
-            //    - 目标角度计算（落在扇区内的随机位置）
-            let cumWeightInt = 0; // 整数累积权重
-            let cumAngle = 0; // 浮点累积角度（度）
+            // 5. 遍历找到奖项，并计算扇区内相对位置
+            let cumInt = 0;
             let winIndex = 0;
-            let targetAngleDeg = 0;
-
-            for (let i = 0; i < count; i++) {
-                // 将归一化权重放大为整数（四舍五入）
-                const weightInt = Math.round(norm[i].weight * SCALE);
-                const sliceAngle = norm[i].weight * 360;
-
-                // 记录选中前的累积值（用于后续计算相对位置）
-                const prevWeightInt = cumWeightInt;
-                const prevAngle = cumAngle;
-
-                cumWeightInt += weightInt;
-                cumAngle += sliceAngle;
-
-                // 随机整数落入当前区间 → 选中
-                if (randInt < cumWeightInt) {
+            let relativePos = 0;
+            for (let i = 0; i < weightInts.length; i++) {
+                const prevCum = cumInt;
+                cumInt += weightInts[i];
+                if (randInt < cumInt) {
                     winIndex = i;
-                    // 计算随机点在扇区内的相对位置 (0~1)
-                    // 注意：weightInt 一定 > 0，因为 randInt < cumWeightInt 且 randInt >= prevWeightInt
-                    const relativePos = weightInt > 0 ?
-                        (randInt - prevWeightInt) / weightInt :
-                        0.5;
-                    // 目标角度 = 扇区起始角度 + 相对位置 × 扇区角度
-                    targetAngleDeg = prevAngle + relativePos * sliceAngle;
+                    // 相对位置 = (randInt - prevCum) / weightInts[i]
+                    relativePos = (randInt - prevCum) / weightInts[i];
                     break;
                 }
             }
 
-            // 安全兜底（极少发生，仅当 randInt 恰好等于最终累积值时）
-            if (targetAngleDeg === 0 && count > 0) {
-                // 强制指向最后一个扇区中心
-                const lastIdx = count - 1;
-                let lastStart = 0;
-                for (let i = 0; i < lastIdx; i++) {
-                    lastStart += norm[i].weight * 360;
+            // 6. 计算目标角度（使用归一化权重确定扇区范围）
+            const norm = normalizeWeights(prizes);
+            // 累积角度（度）
+            let cumAngleDeg = 0;
+            let targetAngleDeg = 0;
+            for (let i = 0; i < norm.length; i++) {
+                const sliceAngle = norm[i].weight * 360;
+                if (i === winIndex) {
+                    targetAngleDeg = cumAngleDeg + relativePos * sliceAngle;
+                    break;
                 }
-                targetAngleDeg = lastStart + (norm[lastIdx].weight * 360) / 2;
-                winIndex = lastIdx;
+                cumAngleDeg += sliceAngle;
             }
 
-            // 5. 计算转盘最终旋转角度
-            //    指针在顶部（-90°方向），转盘需要旋转到 targetAngleDeg + 90°
+            // 7. 转盘旋转角度计算（指针在顶部 -90°）
             const target = (targetAngleDeg + 90) % 360;
-
-            // 当前累计旋转角度的模
             const currentMod = ((totalRotation % 360) + 360) % 360;
             let delta = (target - currentMod + 360) % 360;
             if (delta < 0.5) delta += 360;
             const extraSpins = 5 + Math.floor(Math.random() * 4);
             const targetTotal = totalRotation + delta + extraSpins * 360;
 
-            // 6. 执行旋转动画
+            // 8. 执行动画
             isSpinning = true;
             spinBtn.disabled = true;
             updateBtn.disabled = true;
@@ -717,13 +691,11 @@
             canvas.style.transform = `rotate(${targetTotal}deg)`;
             totalRotation = targetTotal;
 
-            // 7. 动画结束后恢复
             setTimeout(() => {
                 isSpinning = false;
                 spinBtn.disabled = false;
                 updateBtn.disabled = false;
                 pointerEl.classList.remove('active');
-                // 不显示任何结果文字（符合"无文字结果"要求）
             }, 4600);
         }
 
@@ -785,4 +757,3 @@
 
 </body>
 </html>
-
